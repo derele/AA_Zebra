@@ -5,11 +5,11 @@ library(reshape)
 library(vegan)
 
 ## Filter # only run when new filtered data is needed
-FILTER <- FALSE
-newMA <- FALSE
-newAlign <- FALSE
-newTree <- FALSE
-newTax <- FALSE
+FILTER <- TRUE
+newMA <- TRUE
+newAlign <- TRUE
+newTree <- TRUE
+newTax <- TRUE
 
 ## first pool file paths
 files <- list.files(path="/SAN/Zebra/raw_all_fastqs",
@@ -33,13 +33,13 @@ names(filtRs) <- samples
 if (FILTER){
    filter.track <- lapply(seq_along(Ffq.file),  function (i) {
        filterAndTrim(Ffq.file[i], filtFs[i], Rfq.file[i], filtRs[i],
-                     truncLen=c(225,225), minLen=c(225,225), 
-                     maxN=0, maxEE=2, truncQ=2, 
+                     truncLen=c(250,248), minLen=c(250,248), 
+                     maxN=0, maxEE=4, truncQ=2, 
                      compress=TRUE, verbose=TRUE)
    })
-   saveRDS(filter.track, file="/SAN/Zebra/filter.Rdata")
+   saveRDS(filter.track, file="/SAN/Zebra/filter.Rds")
 } else {
-    filter.track <- readRDS(file="/SAN/Zebra/filter.Rdata")
+    filter.track <- readRDS(file="/SAN/Zebra/filter.Rds")
 }
 
 filter <- do.call(rbind, filter.track)
@@ -70,49 +70,46 @@ rownames(ptable) <- names(primers)
 
 getN <- function(x) sum(getUniques(x))
 
-if (newMA){
-    MA <- MultiAmplicon(primers, files)
-    MA1 <- sortAmplicons(MA, starting.at=1, max.mismatch=4)
-    MA2 <- derepMulti(MA1, mc.cores=20)
+MA <- MultiAmplicon(primers, files)
+MA1 <- sortAmplicons(MA, starting.at=1, max.mismatch=4)
 
-    MA3 <- dadaMulti(MA2, err=NULL, selfConsist=TRUE,
-                     multithread=TRUE) ##  pool=TRUE)
+saveRDS(MA1, file="/SAN/Zebra/MA1.Rds")
 
-    MA4.merged <- mergeMulti(MA3, justConcatenate=FALSE)
-
-    before.merge <- unlist(lapply(MA4.merged@dada, function (x)
-        sum(unlist(sapply(slot(x, "dadaF"), getN)))))
-    after.merge <- unlist(lapply(MA4.merged@mergers, function (x)
-        sum(unlist(sapply(x, getN)))))
-    MA4 <- mergeMulti(MA3, justConcatenate=after.merge/before.merge<0.5)
-    
-    MA5 <- sequenceTableMulti(MA4)
-    MA6 <- noChimeMulti(MA5, mc.cores=20)
-    
-    STnoC <- MA6@sequenceTableNoChime
-    saveRDS(STnoC, file="/SAN/Zebra/table_STnoC_Npooled_mix.Rdata")
-    saveRDS(MA6, file="/SAN/Zebra/MA6_Npooled_mix.Rdata")
-} else {
-    STnoC <- readRDS(file="/SAN/Zebra/table_STnoC_Npooled_mix.Rdata")
-    MA6 <- readRDS(file="/SAN/Zebra/MA6_Npooled_mix.Rdata")
-} 
-
-pdf("figures/primers_MA_sorted.pdf", 
-        width=45, height=15, onefile=FALSE)
-    cluster <- plot_Amplicon_numbers(rawCounts(MA1))
+pdf("figures/primers_MA_sorted.pdf", width=46)
+plotAmpliconNumbers(MA1)
 dev.off()
 
+MA2 <- derepMulti(MA1, mc.cores=20)
+
+MA3 <- dadaMulti(MA2, Ferr=NULL, Rerr=NULL, selfConsist=TRUE,
+                 multithread=TRUE) ##  pool=TRUE)
+
+MA4.merged <- mergeMulti(MA3, justConcatenate=FALSE)
+
+prop.merged <- calcPropMerged(MA4.merged)
+prop.merged[is.na(prop.merged)] <- 0
+
+MA4 <- mergeMulti(MA3, justConcatenate=prop.merged<0.8)
+    
+MA5 <- makeSequenceTableMulti(MA4)
+MA6 <- removeChimeraMulti(MA5, mc.cores=20)
+    
+MA7 <- fillSampleTables(MA6)
+
+saveRDS(MA7, file="/SAN/Zebra/MA7_mix.Rds")
+
+## MA7 <- readRDS(file="/SAN/Zebra/MA7_mix.Rds")
 
 ## write sequences for taxonomy
 if (FALSE){
-    all.seq <- lapply(STnoC, colnames)
+    all.seq <- getSequencesFromTable(MA7)
     all.seq <- unlist(all.seq)
     writeFasta(DNAStringSet(all.seq), "/SAN/Zebra/merged_seqs.fasta")
 }
 
 getN <- function(x) sum(getUniques(x))
 
-track.l <- lapply(seq_along(MA6@dada), function (i) {
+track.l <- lapply(seq_along(getDadaF(MA7)), function (i) {
     track <- cbind(
         ## something strange like this is be needed to get the
         ## numbers for samples actually processed for that amplicon
