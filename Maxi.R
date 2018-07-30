@@ -5,8 +5,9 @@ library(reshape)
 library(vegan)
 
 ## Filter # only run when new filtered data is needed
-FILTER <- TRUE
-newMA <- TRUE
+FILTER <- FALSE
+newMA <- FALSE
+newDeDa <- FALSE
 newAlign <- TRUE
 newTree <- TRUE
 newTax <- TRUE
@@ -33,7 +34,7 @@ names(filtRs) <- samples
 if (FILTER){
    filter.track <- lapply(seq_along(Ffq.file),  function (i) {
        filterAndTrim(Ffq.file[i], filtFs[i], Rfq.file[i], filtRs[i],
-                     truncLen=c(250,248), minLen=c(250,248), 
+                     truncLen=c(245,240), minLen=c(245,240), 
                      maxN=0, maxEE=4, truncQ=2, 
                      compress=TRUE, verbose=TRUE)
    })
@@ -68,23 +69,82 @@ primers <- PrimerPairsSet(primerF, primerR)
 
 rownames(ptable) <- names(primers)
 
-getN <- function(x) sum(getUniques(x))
-
 MA <- MultiAmplicon(primers, files)
-MA1 <- sortAmplicons(MA, starting.at=1, max.mismatch=4)
 
-saveRDS(MA1, file="/SAN/Zebra/MA1.Rds")
+
+if(newMA) {
+    if(dir.exists("./stratified_files/")){
+        unlink("./stratified_files/",
+               recursive=TRUE)
+        }
+    MA1 <- sortAmplicons(MA, starting.at=1, max.mismatch=4)
+    saveRDS(MA1, file="/SAN/Zebra/MA1.Rds")
+} else {
+    if(!newMA){
+        MA1 <- readRDS(file="/SAN/Zebra/MA1.Rds")
+    } else {stop("Whant new sorting or not? Set newMA to TRUE")}
+} 
+
 
 pdf("figures/primers_MA_sorted.pdf", width=46)
 plotAmpliconNumbers(MA1)
 dev.off()
 
-MA2 <- derepMulti(MA1, mc.cores=20)
+if(newDeDa){
+    MA2 <- derepMulti(MA1, mc.cores=20)
+    MA3.1 <- dadaMulti(MA2[, which(grepl("^P1", colnames(MA2)))],
+                       Ferr=NULL, Rerr=NULL, selfConsist=TRUE,
+                   multithread=FALSE, mc.cores=20, verbose=0)
+    MA3.2 <- dadaMulti(MA2[, which(grepl("^P2", colnames(MA2)))],
+                       Ferr=NULL, Rerr=NULL, selfConsist=TRUE,
+                       multithread=FALSE, mc.cores=20, verbose=0)
+    saveRDS(MA3.1, file="/SAN/Zebra/MA3.1.Rds")
+    saveRDS(MA3.2, file="/SAN/Zebra/MA3.2.Rds")
+} else {
+    MA3.1 <- readRDS(file="/SAN/Zebra/MA3.1.Rds")
+    MA3.2 <- readRDS(file="/SAN/Zebra/MA3.2.Rds")
+}
 
-MA3 <- dadaMulti(MA2, Ferr=NULL, Rerr=NULL, selfConsist=TRUE,
-                 multithread=TRUE) ##  pool=TRUE)
+## some strange error.. TODO later... 
+MA3.2@dada[unlist(lapply(MA3.2@dada, is.character))] <- list(list())
 
-MA4.merged <- mergeMulti(MA3, justConcatenate=FALSE)
+concatenatePairedReadFileSets <- function(x, y){
+    PairedReadFileSet(readsF=c(x@readsF, y@readsF),
+                      readsR=c(x@readsR, y@readsR))
+}
+
+concatenateStratifiedFiles <- function(x, y) 
+lapply(seq_along(x), function (i){
+    concatenatePairedReadFileSets(x[[i]], y[[i]])
+})
+
+concatenateRawCounts <- function(x, y){
+    cbind(x@rawCounts, y@rawCounts)
+}
+
+concatenateDerep <- function(x, y){
+    lapply(seq_along(x@derep), function (i){
+        c(x@derep[i], y@derep[i])
+    })
+}
+
+concatenateDada <- function(x, y){
+        dF <- c(getDadaF(x), getDadaF(y))
+        dR <- c(getDadaR(x), getDadaF(y))
+        new("PairedDada", dadaF=dF, dadaR=dR)
+}
+
+MA3 <- MultiAmplicon(MA3.1@PrimerPairsSet,
+                     concatenatePairedReadFileSets(MA3.1@PairedReadFileSet,
+                                                   MA3.2@PairedReadFileSet),
+                     concatenateRawCounts(MA3.1, MA3.2),
+                     concatenateStratifiedFiles(MA3.1@stratifiedFiles,
+                                                MA3.2@stratifiedFiles),
+                     concatenateDerep(MA3.1, MA3.2),
+                     concatenateDada(MA3.1, MA3.2)
+                     )
+
+MA4.merged <- mergeMulti(MA3, justConcatenate=FALSE, mc.cores=20)
 
 prop.merged <- calcPropMerged(MA4.merged)
 prop.merged[is.na(prop.merged)] <- 0
@@ -96,52 +156,28 @@ MA6 <- removeChimeraMulti(MA5, mc.cores=20)
     
 MA7 <- fillSampleTables(MA6)
 
-saveRDS(MA7, file="/SAN/Zebra/MA7_mix.Rds")
+saveRDS(MA6, file="/SAN/Zebra/MA6_mix.Rds")
 
-## MA7 <- readRDS(file="/SAN/Zebra/MA7_mix.Rds")
+## MA6 <- readRDS(file="/SAN/Zebra/MA6_mix.Rds")
 
 ## write sequences for taxonomy
 if (FALSE){
-    all.seq <- getSequencesFromTable(MA7)
+    all.seq <- lapply(getSequenceTable(MA7), colnames)
     all.seq <- unlist(all.seq)
     writeFasta(DNAStringSet(all.seq), "/SAN/Zebra/merged_seqs.fasta")
 }
 
-getN <- function(x) sum(getUniques(x))
 
-track.l <- lapply(seq_along(getDadaF(MA7)), function (i) {
-    track <- cbind(
-        ## something strange like this is be needed to get the
-        ## numbers for samples actually processed for that amplicon
-        MA6@rawCounts[i, ][MA6@rawCounts[i, ]>0],
-        sapply(slot(MA6@dada[[i]], "dadaF"), getN),
-        sapply(MA6@mergers[[i]], getN, simplify=FALSE),
-        rowSums(MA6@sequenceTable[[i]]),
-        rowSums(MA6@sequenceTableNoChime[[i]]))
-    if(ncol(track)==5){
-    colnames(track) <- c("sorted",
-                         "denoised", "merged",
-                         "tabled", "nonchim")
-    track <- apply(track, 2, as.numeric)
-    rownames(track) <- rownames(MA6@sequenceTable[[i]])
-    return(track)
-    } else {return(data.frame(sorted=0,
-                              denoised=0,
-                              merged=0,
-                              tabled=0,
-                              nochim=0))
-    }
-})
+pdf("figures/primers_follow.pdf", width=8, height=4)
+plotPipelineSummary(MA)
+dev.off()
+    
+df("figures/primers_log_follow.pdf", width=8, height=4)
+plotPipelineSummary(MA) + scale_y_log10("number of (samples with) reads")
+dev.off()
 
-track.drop <- as.data.frame(
-    do.call("rbind", lapply(track.l, colSums, na.rm=TRUE)))
-
-rownames(track.drop) <- rownames(MA6)
-
-track.drop <- transform(track.drop,
-                        perc.merge=merged/denoised)[order(track.drop$sorted),]
-
-primer.df <- merge(track.drop, ptable, by=0)
+ptable$num <- 1:nrow(ptable)
+foo <- merge(track, ptable, by.x="L1", by.y="num")
 
 primer_asv_numbers <- unlist(lapply(STnoC, ncol))
 
