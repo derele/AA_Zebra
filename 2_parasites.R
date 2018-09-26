@@ -1,39 +1,25 @@
+library(pheatmap)
+library(DESeq2)
+
 if(!exists("PS")){
     source("1_general_MA.R")
 }
 
 
-################################## 18S and 28S  ##########################
-## library(DESeq2)
-PS.para <- subset_taxa(PS, phylum%in%c("Nematoda",
+################################## 18S and 28S  #########################
+PM.para <- subset_taxa(PM, phylum%in%c("Nematoda",
                                        "Apicomplexa",
                                        "Platyhelminthes"))
 
-PG.para <- tax_glom(PS.para, "genus", NArm = TRUE)
+PG.para <- tax_glom(PM.para, "genus", NArm = TRUE)
 
 table(tax_table(PG.para)[,6])
 
-Zeb <- by(otu_table(PG.para), sample_data(PG.para)$Animal.No, colSums)
-Zebra <- do.call(cbind, Zeb)
-Zebra <- Zebra[, !colnames(Zebra)%in%"neg"]
+mat <- as.matrix(t(otu_table(PG.para)))
+rownames(mat) <- make.names(tax_table(PG.para)[, 6])
 
-PSM.para <- phyloseq(otu_table(Zebra, taxa_are_rows=TRUE),
-                     sample_data(sample.data[colnames(Zebra), ]),
-                     tax_table(tax_table(PG.para)))
-
-PSM.para.Ages <- subset_samples(PSM.para,
-                                Age%in%c("fl", "juv", "mat", "sa") &
-                                Season%in%c("d", "w") &
-                                hab%in%c("lg", "sgp"))
-
-library(pheatmap)
-
-mat <- as.matrix(otu_table(PSM.para.Ages))
-rownames(mat) <- make.names(tax_table(PSM.para.Ages)[, 6])
-
-colanot <- data.frame(lapply(sample_data(PSM.para.Ages)[, c("veg", "Sex", "Age")],
+colanot <- data.frame(lapply(sample_data(PG.para)[, c("veg", "Sex", "Age")],
                              factor))
-
 ann_colors <- list(
     veg = c("orange", "green", "darkgreen"),
     Sex = c("white", "red", "blue"),
@@ -47,10 +33,25 @@ pheatmap(log10(mat+1),  labels_col=rep("", times=ncol(mat)),
 dev.off()
 
 
+## high vervalence parasites
+hPP <- c("Lamanema", "Strongylus", "Necator", "Cylicostephanus",
+         "Gregarina", "Strongyloides", "Dictyocaulus", "Haemonchus")
+
+pdf("figures/parasite_Abu_genera_heat.pdf", width=8, height=4)
+pheatmap(log10(mat[hPP,]+1),  labels_col=rep("", times=ncol(mat[hPP,])),
+         annotation_col = colanot)
+dev.off()
 
 
-diagdds <- phyloseq_to_deseq2(PSM.para.Ages, ~ Age*Season)
-diagdds <- estimateSizeFactors(diagdds, type="poscounts") # type="iterate"
+PM.hPP <- subset_taxa(PM, genus%in%hPP)
+
+PM.hPP.Ages <- subset_samples(PM.hPP,
+                              Age%in%c("fl", "juv", "mat", "sa") &
+                              Season%in%c("d", "w") &
+                              hab%in%c("lg", "sgp"))
+
+diagdds <- phyloseq_to_deseq2(PM.hPP.Ages, ~ Age*Season)
+diagdds <- estimateSizeFactors(diagdds, type="poscounts") 
 diagdds.interact <- DESeq(diagdds, test="LRT",
                           reduced = ~ Age+Season, fitType="parametric")
 diagdds.Season <- DESeq(diagdds, test="LRT", reduced = ~ Age, fitType="parametric")
@@ -88,8 +89,8 @@ sigtab.null <- cbind(as(sigtab.null, "data.frame"),
 rownames(sigtab.null) <- NULL
 
 ### An interaction effect of Season and Age on Ostertagia and Cylicoccus
-foo <- cbind(sample_data(PSM),
-             t(unname(otu_table(subset_taxa(PSM, Genus%in%"Cylicocyclus")))))
+foo <- cbind(sample_data(PSM.para),
+             t(unname(otu_table(subset_taxa(PSM.para, genus%in%"Cylicocyclus")))))
 
 sort(tapply(foo$sp1, as.factor(foo$Season):as.factor(foo$Age), median))
 

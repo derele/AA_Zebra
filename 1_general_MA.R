@@ -1,8 +1,9 @@
 library(ggplot2)
 library(MultiAmplicon)
-library(parallel)
 library(reshape)
-library(vegan)
+library(phyloseq)
+library(data.table)
+
 
 ## Filter # only run when new filtered data is needed
 FILTER <- FALSE
@@ -119,17 +120,8 @@ if(newDeDa){
 }
 
 ##### TAXONOMY assignment
-assign.full.tax <- function(seqtab, what){
-    seqs <- getSequences(seqtab)
-    if(what%in%"18S"){
-        taxa <- assignTaxonomy(seqs,
-                               "/SAN/db/RDP/annotated_18S_ena.fasta")
-    }
-    if(what%in%"28S"){
-        taxa <- assignTaxonomy(seqs, "/SAN/db/RDP/annotated_28S_ena.fasta")
-    }
-    return(taxa)
-}
+
+## Write out the sequences to blast them...
 
 STnoC <- getSequenceTableNoChime(MA6)
 
@@ -152,7 +144,7 @@ Biostrings::writeXStringSet(DNAStringSet(unlist(sequences)),
 ## we use this to limit nr blast to usable entries
 ##  blastn -negative_gilist /SAN/db/blastdb/uncultured.gi -query all_seq_final.fasta -db /SAN/db/blastdb/nt/nt -outfmt 11 -evalue 1e-5 -num_threads 10 -max_target_seqs 5 -out all_seq_final_vs_nt.asn
 
-## to be more flexible wit the output of that time consuming blast I
+## to be more flexible with the output of that time consuming blast I
 ## generated an archive that contains all possible information, we
 ## generate a tabular format including taxonomy ids using:
 ## blast_formatter -archive all_seq_final_vs_nt.asn -outfmt "10
@@ -181,8 +173,6 @@ rownames(blast.tax) <- NULL
 ## blast.tax <- readRDS(file="/SAN/Zebra/blast_tax.Rds")
 
 blast <- cbind(blast, blast.tax)
-
-library(data.table)
 
 blt <- as.data.table(blast)
 
@@ -342,8 +332,22 @@ all.tax <- as.matrix(all.tax)
 ## all.tax <- all.tax[colnames(ALL), ]
 rownames(all.tax) <- colnames(ALL)
 
-library(phyloseq)
 PS <- phyloseq(otu_table(ALL, taxa_are_rows=FALSE),
                sample_data(samples.long[rownames(ALL), ]),
                tax_table(all.tax))
 
+Zeb.tab <- as.data.table(cbind(otu_table(PS),
+                               Animal=sample_data(PS)$Animal.No))
+
+Ccols <- colnames(Zeb.tab)[!colnames(Zeb.tab)%in%"Animal"]
+
+Zeb <- Zeb.tab[, lapply(.SD, function(x) sum(as.numeric(x))),
+               by=Animal, .SDcols=Ccols]
+
+Zebra <- as.data.frame(Zeb[, ..Ccols])
+
+rownames(Zebra) <- Zeb[, Animal]
+
+PM <- phyloseq(otu_table(Zebra, taxa_are_rows=FALSE),
+               sample_data(sample.data[rownames(Zebra), ]),
+               tax_table(tax_table(all.tax)))
