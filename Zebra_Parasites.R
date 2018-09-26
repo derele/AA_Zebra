@@ -110,7 +110,7 @@ if(newDeDa){
     ## these two give error further down, they are empty anyways so
     ## lets remove them
     MA4 <- MA4[which(!rownames(MA4)%in%c("Hadz_1200CR.wang1624CR6L 18S",
-                                        "LCO1490.HCO2198_5Mod COI")), ]
+                                         "LCO1490.HCO2198_5Mod COI")), ]
     MA5 <- makeSequenceTableMulti(MA4, mc.cores=20, orderBy="nsamples")
     MA6 <- removeChimeraMulti(MA5, mc.cores=20)
     saveRDS(MA6, file="/SAN/Zebra/MA6_mix.Rds")
@@ -224,52 +224,57 @@ phylum <- blt[bitdiff>-50, .(phylum=get.unique.or.na(phylum)),
 superkingdom <- blt[bitdiff>-100, .(superkingdom=get.unique.or.na(superkingdom)),
                     by=query]
 
-annot <- cbind(superkingdom[,"superkingdom"],
+annot <- cbind(superkingdom[,c("query", "superkingdom")],
                phylum[,"phylum"],
                class[,"class"],
                order[,"order"],
                family[,"family"],
                genus[,"genus"])
 
-if(newTax){
-    tax.l <- mclapply(seq_along(STnoC), function (i){
-        if(length(dim(STnoC[[i]]))==2){
-            assign.full.tax(STnoC[[i]],
-                            gsub(".*? (\\d\\dS$)", "\\1" ,
-                                 names(STnoC)[[i]]))
-        } else {NULL}
-    }, mc.cores=20)
-    saveRDS(tax.l, "/SAN/Zebra/tax.own.Rds")
-} else{tax.l <- readRDS("/SAN/Zebra/tax.own.Rds")}
+## now we have to break this up into an annotation list for each
+## amplicon
+seqnametab <- as.data.table(cbind(query=names(sequences), sequences))
+seqnametab <- merge(seqnametab, annot)
 
+dupseq <- seqnametab$sequences[duplicated(seqnametab$sequences)]
+seqnametab[sequences%in%dupseq,]
 
-## some strange tax error... well no sequences there ;-)... 
-tax.error <- lapply(tax.l, class)%in%"try-error"
-tax.l <- tax.l[which(!tax.error)]
-MA.final <- MA6[which(!tax.error), ]
+seqnametab <- seqnametab[!duplicated(seqnametab$sequences),]
 
-names(tax.l) <- rownames(MA.final)
+annot.list <- lapply(STnoC, function (x) {
+    setkey(seqnametab, sequences)
+    seqnametab[colnames(x),
+               c("superkingdom", "phylum", "class", "order", "family", "genus")]
+})
+
+## whatch out for this creating bugs
+nrow(annot.list[["Mach1.Nem_0425_4 18S"]])
+nrow(STnoC[["Mach1.Nem_0425_4 18S"]])
+
+## drop all amplicons ones with no annotation
+keep <- unlist(lapply(annot.list, nrow))>0
+
+annot.list <- annot.list[keep]
+STnoC <- STnoC[keep]
+
+## now they are in sync
+cbind(cumsum(unlist(lapply(annot.list, nrow))), cumsum(unlist(lapply(STnoC, ncol))))
 
 ## tabulate Phyla for each amplicon
-lapply(tax.l, function (x) table(x[, 2]))
+lapply(annot.list, function (x) table(x[, "phylum"]))
 
 tabulate.genera <- function(tax, subset){
-    t <- tax[tax[, 2]%in%subset, ]
+    t <- tax[phylum%in%subset, ]
     if(!is.null(ncol(t))){
-        table(t[,6])
+        table(t[,genus])
     } else {NULL}
 }
 
 ## tabulate generaa for some phyla
-lapply(tax.l, function (x) tabulate.genera(x,  "Nematoda"))
-lapply(tax.l, function (x) tabulate.genera(x,  "Apicomplexa"))
-lapply(tax.l, function (x) tabulate.genera(x,  "Platyhelminthes"))
-
-## Don't look at this, it's frustrating
-## lapply(tax.l, function (x) tabulate.genera(x,  "Streptophyta"))
-
-Seqs18S <- Biostrings::readDNAStringSet("/SAN/db/RDP/annotated_18S_ena.fasta")
-Seqs28S <- Biostrings::readDNAStringSet("/SAN/db/RDP/annotated_28S_ena.fasta")
+lapply(annot.list, function (x) tabulate.genera(x,  "Nematoda"))
+lapply(annot.list, function (x) tabulate.genera(x,  "Apicomplexa"))
+lapply(annot.list, function (x) tabulate.genera(x,  "Platyhelminthes"))
+lapply(annot.list, function (x) tabulate.genera(x,  "Streptophyta"))
 
 ## now get the real samples
 sample.data <- read.csv("./sample_list_egg_counts_fgm.csv",
@@ -292,11 +297,6 @@ fac.vars <- c("Date", "Sex", "Age", "Repro", "Season", "dens", "hab",
 sample.data[, num.vars] <- apply(sample.data[, num.vars], 2, as.numeric)
 sample.data[, fac.vars] <- apply(sample.data[, fac.vars], 2, as.factor)
 
-## how many of our samples from processing files are in the sample
-## table
-table(samples%in%sample.data$FAA_index_I)
-table(samples%in%sample.data$FAA_index_II)
-
 samples.long <- reshape(sample.data,
                         varying=list(c("FAA_index_I", "FAA_index_II")),
                         direction="long", timevar = "pool",
@@ -308,8 +308,8 @@ rownames(samples.long) <- samples.long$FAA_index_I
 
 pdf("figures/primers_MA_sorted_POS.pdf", 
     width=45, height=15, onefile=FALSE)
-clust <- plotAmpliconNumbers(MA.final[, which(colnames(MA.final)%in%
-                                              samples.long$FAA_index_I)])
+clust <- plotAmpliconNumbers(MA6[, which(colnames(MA6)%in%
+                                         samples.long$FAA_index_I)])
 dev.off()
 
 two.clusters.row <- cutree(clust$tree_row, k=2)
@@ -318,10 +318,10 @@ two.clusters.col <- cutree(clust$tree_col, k=2)
 keep.prime <- names(two.clusters.row)[two.clusters.row==1]
 keep.sample <- names(two.clusters.col)[two.clusters.col==1]
 
-MA <- MA.final[which(rownames(MA.final)%in%keep.prime),
-               which(colnames(MA.final)%in%
-                     keep.sample &
-                     colnames(MA.final)%in% samples.long$FAA_index_I)]
+MA <- MA6[which(rownames(MA6)%in%keep.prime),
+          which(colnames(MA6)%in%
+                keep.sample &
+                colnames(MA6)%in% samples.long$FAA_index_I)]
 
 pdf("figures/primers_MA_sorted_VAL.pdf", width=45, height=15, onefile=FALSE)
 plotAmpliconNumbers(MA)
@@ -334,21 +334,23 @@ MA@sequenceTableFilled <- fill@sequenceTableFilled
 ALL <- Reduce(cbind, fill@sequenceTableFilled)
 
 ## same for tax
-all.tax <- as.data.frame(Reduce(rbind, tax.l))
+all.tax <- as.data.frame(Reduce(rbind, annot.list[rownames(MA)]))
 all.tax <- as.matrix(all.tax)
 
 ## bring in same order and remove tax from bad amplicons (sorted out
-## above)
-all.tax <- all.tax[colnames(ALL), ]
+## above) ## not necessary
+## all.tax <- all.tax[colnames(ALL), ]
+rownames(all.tax) <- colnames(ALL)
 
 library(phyloseq)
-library("DESeq2")
-################################## 18S and 28S  ##########################
 PS <- phyloseq(otu_table(ALL, taxa_are_rows=FALSE),
                sample_data(samples.long[rownames(ALL), ]),
                tax_table(all.tax))
 
 
+################################## 18S and 28S  ##########################
+
+library(DESeq2)
 
 PS.para <- subset_taxa(PS, Phylum%in%c("Nematoda",
                                        "Apicomplexa",
