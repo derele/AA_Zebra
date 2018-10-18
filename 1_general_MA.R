@@ -3,6 +3,9 @@ library(MultiAmplicon)
 library(reshape)
 library(phyloseq)
 library(data.table)
+library(taxonomizr)
+library(taxize)
+
 
 
 ## Filter # only run when new filtered data is needed
@@ -108,10 +111,14 @@ if(newDeDa){
     prop.merged[is.na(prop.merged)] <- 0
     MA4 <- mergeMulti(MA3, justConcatenate=prop.merged<0.8,
                       mc.cores=20)
-    ## these two give error further down, they are empty anyways so
+    ## two amplicons give error further down, they are empty anyways so
     ## lets remove them
     MA4 <- MA4[which(!rownames(MA4)%in%c("Hadz_1200CR.wang1624CR6L 18S",
                                          "LCO1490.HCO2198_5Mod COI")), ]
+    ## a more general procedure (unless I kill this bug in the
+    ## package) would be:
+    ## non.empty <- unlist(lapply(getMergers(MA4), length))>0
+    ## MA4 <- MA4[which(non.empty), ]
     MA5 <- makeSequenceTableMulti(MA4, mc.cores=20, orderBy="nsamples")
     MA6 <- removeChimeraMulti(MA5, mc.cores=20)
     saveRDS(MA6, file="/SAN/Zebra/MA6_mix.Rds")
@@ -125,117 +132,129 @@ if(newDeDa){
 
 STnoC <- getSequenceTableNoChime(MA6)
 
-sequences <- unlist(lapply(STnoC, colnames))
-names(sequences) <- paste0("asv_", 1:length(sequences))
 
-Biostrings::writeXStringSet(DNAStringSet(unlist(sequences)),
-                            "/SAN/Zebra/all_seq_final.fasta")
+if(newTax){
+    sequences <- unlist(lapply(STnoC, colnames))
+    names(sequences) <- paste0("asv_", 1:length(sequences))
+    Biostrings::writeXStringSet(DNAStringSet(unlist(sequences)),
+                                "/SAN/Zebra/all_seq_final.fasta")
 
-## We blast this file against NR with a gi-list excluding all
-## uncultured sequences
+    ## We blast this file against NR with a gi-list excluding all
+    ## uncultured sequences
 
-## create the gi-list as a download from an NCBI Entrez Nucleotide
-## search '"environmental samples"[organism] OR metagenomes[orgn]'
+    ## create the gi-list as a download from an NCBI Entrez Nucleotide
+    ## search '"environmental samples"[organism] OR metagenomes[orgn]'
 
-## or via command line: esearch -db nucleotide -query '"environmental
-## samples"[organism] OR metagenomes[orgn]' | efetch -format gi -mode
-## text > /SAN/db/blastdb/uncultured_gilist.txt
+    ## or via command line: esearch -db nucleotide -query '"environmental
+    ## samples"[organism] OR metagenomes[orgn]' | efetch -format gi -mode
+    ## text > /SAN/db/blastdb/uncultured_gilist.txt
 
-## we use this to limit nr blast to usable entries
-##  blastn -negative_gilist /SAN/db/blastdb/uncultured.gi -query all_seq_final.fasta -db /SAN/db/blastdb/nt/nt -outfmt 11 -evalue 1e-5 -num_threads 10 -max_target_seqs 5 -out all_seq_final_vs_nt.asn
+    ## we use this to limit nr blast to usable entries blastn
+    ##  -negative_gilist /SAN/db/blastdb/uncultured.gi -query
+    ##  all_seq_final.fasta -db /SAN/db/blastdb/nt/nt -outfmt 11 -evalue
+    ##  1e-5 -num_threads 10 -out all_seq_final_vs_nt.asn
 
-## to be more flexible with the output of that time consuming blast I
-## generated an archive that contains all possible information, we
-## generate a tabular format including taxonomy ids using:
-## blast_formatter -archive all_seq_final_vs_nt.asn -outfmt "10
-## qaccver saccver pident length mismatch gapopen qstart qend sstart
-## send evalue bitscore staxid" > | all_seq_final_vs_nt.blttax
+    ## to be more flexible with the output of that time consuming blast I
+    ## generated an archive that contains all possible information, we
+    ## generate a tabular format including taxonomy ids using:
+    ## blast_formatter -archive all_seq_final_vs_nt.asn -outfmt "10
+    ## qaccver saccver pident length mismatch gapopen qstart qend sstart
+    ## send evalue bitscore staxid" > all_seq_final_vs_nt.blttax
 
-## we read that ouput into R blast <-
-blast <- read.csv("/SAN/Zebra/all_seq_final_vs_nt.blttax", header=FALSE)
+    ## we read that ouput into R blast <-
+    blast <- read.csv("/SAN/Zebra/all_seq_final_vs_nt.blttax", header=FALSE)
 
-names(blast) <- c("query", "subject", "pident", "length", "mismatch",
-                  "gapopen", "qstart", "qend", "sstart", "send", "evalue",
-                  "bitscore", "staxid")
+    names(blast) <- c("query", "subject", "pident", "length", "mismatch",
+                      "gapopen", "qstart", "qend", "sstart", "send", "evalue",
+                      "bitscore", "staxid")
 
-## now we can "taxonomerize" the output (add the full paths)
-library(taxonomizr)
-library(taxize)
+    taxaNodes <- read.nodes("/SAN/db/taxonomy/nodes.dmp")
+    taxaNames <- read.names("/SAN/db/taxonomy/names.dmp")
 
-taxaNodes <- read.nodes("/SAN/db/taxonomy/nodes.dmp")
-taxaNames <- read.names("/SAN/db/taxonomy/names.dmp")
+    blast.tax <- getTaxonomy(unique(blast$staxid),taxaNodes,taxaNames)
+    blast.tax <- as.data.frame(blast.tax)
+    blast.tax$staxid <- unique(blast$staxid)
+    rownames(blast.tax) <- NULL
 
-blast.tax <- getTaxonomy(blast$staxid,taxaNodes,taxaNames)
-blast.tax <- as.data.frame(blast.tax)
-rownames(blast.tax) <- NULL
+    saveRDS(blast.tax, file="/SAN/Zebra/blast_tax.Rds")
 
-## saveRDS(blast.tax, file="/SAN/Zebra/blast_tax.Rds")
-## blast.tax <- readRDS(file="/SAN/Zebra/blast_tax.Rds")
+    blastT <- merge(blast, blast.tax, by="staxid")
 
-blast <- cbind(blast, blast.tax)
+    blt <- as.data.table(blastT)
 
-blt <- as.data.table(blast)
-
-blt <- blt[,.(bitsum=sum(bitscore),
+    blt <- blt[,.(bitsum=sum(bitscore),
                   superkingdom, phylum, class, order, family, genus, species),
                by=c("query", "subject")]
 
-blt <- unique(blt)
+    blt <- unique(blt)
+
+    blt <- blt[,.(bitdiff= bitsum - max(bitsum),
+                  superkingdom, phylum, class, order, family, genus, species),
+               by=c("query")]
+
+    get.opt.gen <- function(para, what){
+        get.unique.or.na <- function (x){
+            ## unique taxa at that level excluding potential NA's 
+            ux <- unique(as.character(x[!is.na(x)]))
+            ## but return NA if they are not unique
+            if(length(ux)==1){return(ux)} else {as.character(NA)}
+        }
+
+        df <- blt[bitdiff > para, .(get.unique.or.na(eval(as.name((what))))),
+                     by=query]
+        setnames(df, "V1", what)
+        length(df[, eval(as.name(what))][is.na(df[, eval(as.name(what))])])
+    }
+
+    get.opt.gen(-2.8, "genus")
+    
+    optimize(get.opt.gen, upper = -1, lower=-50, what="genus")
 
 
-blt <- blt[,.(bitdiff= bitsum - max(bitsum),
-              superkingdom, phylum, class, order, family, genus, species),
-           by=c("query")]
+    genus <- blt[bitdiff > -2.8, .(get.unique.or.na(genus)),
+                 by=query]
+    
+    family <- blt[bitdiff>-20, .(family=get.unique.or.na(family)),
+                  by=query]
 
+    order <- blt[bitdiff>-30, .(order=get.unique.or.na(order)),
+                 by=query]
 
-get.unique.or.na <- function (x){
-    ## unique taxa at that level excluding potential NA's 
-    ux <- unique(as.character(x[!is.na(x)]))
-    ## but return NA if they are not unique
-    if(length(ux)==1){return(ux)} else {as.character(NA)}
+    class <- blt[bitdiff>-40, .(class=get.unique.or.na(class)),
+                 by=query]
+
+    phylum <- blt[bitdiff>-50, .(phylum=get.unique.or.na(phylum)),
+                  by=query]
+
+    superkingdom <- blt[bitdiff>-100, .(superkingdom=get.unique.or.na(superkingdom)),
+                        by=query]
+
+    annot <- cbind(superkingdom[,c("query", "superkingdom")],
+                   phylum[,"phylum"],
+                   class[,"class"],
+                   order[,"order"],
+                   family[,"family"],
+                   genus[,"genus"])
+
+    ## now we have to break this up into an annotation list for each
+    ## amplicon
+    seqnametab <- as.data.table(cbind(query=names(sequences), sequences))
+    seqnametab <- merge(seqnametab, annot)
+
+    dupseq <- seqnametab$sequences[duplicated(seqnametab$sequences)]
+    ## seqnametab[sequences%in%dupseq,]
+
+    seqnametab <- seqnametab[!duplicated(seqnametab$sequences),]
+
+    annot.list <- lapply(STnoC, function (x) {
+        setkey(seqnametab, sequences)
+        seqnametab[colnames(x),
+                   c("superkingdom", "phylum", "class", "order", "family", "genus")]
+    })
+    saveRDS(annot.list, file="/SAN/Zebra/annot_list.Rds")
+} else {
+    annot.list <- readRDS(file="/SAN/Zebra/annot_list.Rds")
 }
-
-
-genus <- blt[bitdiff>-10, .(genus=get.unique.or.na(genus)),
-             by=query]
-
-family <- blt[bitdiff>-20, .(family=get.unique.or.na(family)),
-              by=query]
-
-order <- blt[bitdiff>-30, .(order=get.unique.or.na(order)),
-              by=query]
-
-class <- blt[bitdiff>-40, .(class=get.unique.or.na(class)),
-              by=query]
-
-phylum <- blt[bitdiff>-50, .(phylum=get.unique.or.na(phylum)),
-              by=query]
-
-superkingdom <- blt[bitdiff>-100, .(superkingdom=get.unique.or.na(superkingdom)),
-                    by=query]
-
-annot <- cbind(superkingdom[,c("query", "superkingdom")],
-               phylum[,"phylum"],
-               class[,"class"],
-               order[,"order"],
-               family[,"family"],
-               genus[,"genus"])
-
-## now we have to break this up into an annotation list for each
-## amplicon
-seqnametab <- as.data.table(cbind(query=names(sequences), sequences))
-seqnametab <- merge(seqnametab, annot)
-
-dupseq <- seqnametab$sequences[duplicated(seqnametab$sequences)]
-seqnametab[sequences%in%dupseq,]
-
-seqnametab <- seqnametab[!duplicated(seqnametab$sequences),]
-
-annot.list <- lapply(STnoC, function (x) {
-    setkey(seqnametab, sequences)
-    seqnametab[colnames(x),
-               c("superkingdom", "phylum", "class", "order", "family", "genus")]
-})
 
 ## whatch out for this creating bugs
 nrow(annot.list[["Mach1.Nem_0425_4 18S"]])
