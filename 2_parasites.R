@@ -1,7 +1,9 @@
 library(pheatmap)
 library(DESeq2)
+library(ggplot2)
 
-if(!exists("PS")){
+
+if(!exists("PM")){
     source("1_general_MA.R")
 }
 
@@ -35,7 +37,7 @@ dev.off()
 
 ## high vervalence parasites
 hPP <- c("Lamanema", "Strongylus", "Necator", "Cylicostephanus",
-         "Gregarina", "Strongyloides", "Dictyocaulus", "Haemonchus")
+         "Gregarina", "Strongyloides", "Dictyocaulus", "Haemonchus", "Oxyuris")
 
 pdf("figures/parasite_Abu_genera_heat.pdf", width=8, height=4)
 pheatmap(log10(mat[hPP,]+1),  labels_col=rep("", times=ncol(mat[hPP,])),
@@ -43,138 +45,180 @@ pheatmap(log10(mat[hPP,]+1),  labels_col=rep("", times=ncol(mat[hPP,])),
 dev.off()
 
 
+## By ASV for prevalent genera
 PM.hPP <- subset_taxa(PM, genus%in%hPP)
 
+PM.hPP <- subset_taxa(PM.hPP,
+                      ## more than 100 as count
+                      colSums(otu_table(PM.hPP))>100 &
+                      ## and in more than 5 samples
+                      colSums(otu_table(PM.hPP)>0)>5)
 PM.hPP.Ages <- subset_samples(PM.hPP,
                               Age%in%c("fl", "juv", "mat", "sa") &
                               Season%in%c("d", "w") &
                               hab%in%c("lg", "sgp"))
 
-diagdds <- phyloseq_to_deseq2(PM.hPP.Ages, ~ Age*Season)
-diagdds <- estimateSizeFactors(diagdds, type="poscounts") 
-diagdds.interact <- DESeq(diagdds, test="LRT",
-                          reduced = ~ Age+Season, fitType="parametric")
-diagdds.Season <- DESeq(diagdds, test="LRT", reduced = ~ Age, fitType="parametric")
-diagdds.Age <- DESeq(diagdds, test="LRT", reduced = ~ Season, fitType="parametric")
-diagdds.null <- DESeq(diagdds, test="LRT", reduced = ~ 1, fitType="parametric")
 
-
-res.interact <- results(diagdds.interact, cooksCutoff = FALSE)
-res.Season <- results(diagdds.Season, cooksCutoff = FALSE)
-res.Age <- results(diagdds.Age, cooksCutoff = FALSE)
-res.null <- results(diagdds.null, cooksCutoff = FALSE)
-
-alpha <- 0.5
-
-sigtab.interact <- res.interact[which(res.interact$padj < alpha), ]
-sigtab.interact <- cbind(as(sigtab.interact, "data.frame"),
-                as(tax_table(PG.para.Ages)[rownames(sigtab.interact), ], "matrix"))
-rownames(sigtab.interact) <- NULL
-
-
-sigtab.Age <- res.Age[which(res.Age$padj < alpha), ]
-sigtab.Age <- cbind(as(sigtab.Age, "data.frame"),
-                as(tax_table(PG.para.Ages)[rownames(sigtab.Age), ], "matrix"))
-rownames(sigtab.Age) <- NULL
-
-sigtab.Season <- res.Season[which(res.Season$padj < alpha), ]
-sigtab.Season <- cbind(as(sigtab.Season, "data.frame"),
-                as(tax_table(PG.para.Ages)[rownames(sigtab.Season), ], "matrix"))
-rownames(sigtab.Season) <- NULL
-
-
-sigtab.null <- res.null[which(res.null$padj < alpha), ]
-sigtab.null <- cbind(as(sigtab.null, "data.frame"),
-                as(tax_table(PG.para.Ages)[rownames(sigtab.null), ], "matrix"))
-rownames(sigtab.null) <- NULL
-
-### An interaction effect of Season and Age on Ostertagia and Cylicoccus
-foo <- cbind(sample_data(PSM.para),
-             t(unname(otu_table(subset_taxa(PSM.para, genus%in%"Cylicocyclus")))))
-
-sort(tapply(foo$sp1, as.factor(foo$Season):as.factor(foo$Age), median))
-
-PSM.para.AdultF <- subset_samples(PSM,
-                                  Age%in%"mat" &
-                                  Repro%in%c("b", "h", "lact", "preg", "u") &
-                                  Sex%in%c("f") &
-                                  Season%in%c("d", "w") &
-                                  hab%in%c("lg", "sgp")
-                                  )
-
-
-diagdds <- phyloseq_to_deseq2(PSM.para.AdultF, ~ Repro*Season)
-diagdds <- estimateSizeFactors(diagdds, type="poscounts") # type="iterate"
-diagdds.interact <- DESeq(diagdds, test="LRT",
-                          reduced = ~ Repro+Season, fitType="parametric")
-
-diagdds.Season <- DESeq(diagdds, test="LRT", reduced = ~ Repro, fitType="parametric")
-diagdds.Repro <- DESeq(diagdds, test="LRT", reduced = ~ Season, fitType="parametric")
-diagdds.null <- DESeq(diagdds, test="LRT", reduced = ~ 1, fitType="parametric")
-
-
-res.interact <- results(diagdds.interact, cooksCutoff = FALSE)
-res.Season <- results(diagdds.Season, cooksCutoff = FALSE)
-res.Repro <- results(diagdds.Repro, cooksCutoff = FALSE)
-res.null <- results(diagdds.null, cooksCutoff = FALSE)
-
-alpha <- 0.5
-
-sigtab.interact <- res.interact[which(res.interact$padj < alpha), ]
-sigtab.Repro <- res.Repro[which(res.Repro$padj < alpha), ]
-sigtab.Season <- res.Season[which(res.Season$padj < alpha), ]
-sigtab.null <- res.null[which(res.null$padj < alpha), ]
-## empty
-
-PSM.para.AdultM <- subset_samples(PSM,
-                                 Age%in%"mat" &
-                                 Repro%in%c("b", "h", "lact", "preg", "u") &
-                                 Sex%in%c("m") &
-                                 Season%in%c("d", "w") &
-                                 hab%in%c("lg", "sgp")
-                                 )
-
-
-diagdds <- phyloseq_to_deseq2(PSM.para.AdultM, ~ Repro*Season)
-diagdds <- estimateSizeFactors(diagdds, type="poscounts") # type="iterate"
-diagdds.interact <- DESeq(diagdds, test="LRT",
-                          reduced = ~ Repro+Season, fitType="parametric")
-
-diagdds.Season <- DESeq(diagdds, test="LRT", reduced = ~ Repro, fitType="parametric")
-diagdds.Repro <- DESeq(diagdds, test="LRT", reduced = ~ Season, fitType="parametric")
-diagdds.null <- DESeq(diagdds, test="LRT", reduced = ~ 1, fitType="parametric")
-
-
-res.interact <- results(diagdds.interact, cooksCutoff = FALSE)
-res.Season <- results(diagdds.Season, cooksCutoff = FALSE)
-res.Repro <- results(diagdds.Repro, cooksCutoff = FALSE)
-res.null <- results(diagdds.null, cooksCutoff = FALSE)
-
-alpha <- 0.5
-
-sigtab.interact <- res.interact[which(res.interact$padj < alpha), ]
-sigtab.Repro <- res.Repro[which(res.Repro$padj < alpha), ]
-sigtab.Season <- res.Season[which(res.Season$padj < alpha), ]
-sigtab.null <- res.null[which(res.null$padj < alpha), ]
-
-library("ggplot2")
-theme_set(theme_bw())
-scale_fill_discrete <- function(palname = "Set1", ...) {
-    scale_fill_brewer(palette = palname, ...)
+deseqTestNULL <- function(P, full, red, alpha=0.1){
+    diagdds <- phyloseq_to_deseq2(P, full)
+    diagdds <- estimateSizeFactors(diagdds, type="poscounts") 
+    diagdds.red <- DESeq(diagdds, test="LRT", reduced = red, fitType="parametric")
+    res.red <- results(diagdds.red, cooksCutoff = FALSE)
+    sigtab.red <- res.red[which(res.red$padj < alpha), ]
+    if (nrow(sigtab.red)>0){
+        sigtab.red <- cbind(as(sigtab.red, "data.frame"),
+                            as(tax_table(P)[rownames(sigtab.red), ], "matrix"))
+        rownames(sigtab.red) <- NULL
+        sigtab.red
+    } else NULL
 }
-## Phylum order
-x <- tapply(sigtab$log2FoldChange, sigtab$Phylum, function(x) max(x))
-x <- sort(x, TRUE)
-sigtab$Phylum <- factor(as.character(sigtab$Phylum), levels=names(x))
 
-## Genus order
-x <- tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
-x <- sort(x, TRUE)
-sigtab$Genus <- factor(as.character(sigtab$Genus), levels=names(x))
 
-ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Phylum)) +
-    geom_point(size=6) +
-    theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))
+deseqTestNULL(PM.hPP.Ages, ~ Age*Season, ~Age+Season)
+deseqTestNULL(PM.hPP.Ages, ~ Age*Season, ~Age)
+deseqTestNULL(PM.hPP.Ages, ~ Age*Season, ~Season)
+deseqTestNULL(PM.hPP.Ages, ~ Age*Season, ~1)
+deseqTestNULL(PM.hPP.Ages, ~ Age, ~1)
+deseqTestNULL(PM.hPP.Ages, ~ Season, ~1)
+## absolutely nothing!!!
+
+
+## By Genus for prevalent genera
+PG.hPP <- subset_taxa(PG.para, genus%in%hPP)
+
+PG.hPP.Ages <- subset_samples(PG.hPP,
+                              Age%in%c("fl", "juv", "mat", "sa") &
+                              Season%in%c("d", "w") &
+                              hab%in%c("lg", "sgp"))
+
+deseqTestNULL(PG.hPP.Ages, ~ Age*Season, ~Age+Season)
+deseqTestNULL(PG.hPP.Ages, ~ Age*Season, ~Age)
+deseqTestNULL(PG.hPP.Ages, ~ Age*Season, ~Season)
+deseqTestNULL(PG.hPP.Ages, ~ Age*Season, ~1)
+deseqTestNULL(PG.hPP.Ages, ~ Age, ~1)
+deseqTestNULL(PG.hPP.Ages, ~ Season, ~1)
+## Age vs the null model is somewhat significant for gGregarina!!!
+## This might credible and interesting Gregarines more in foals,
+## juveniles and subadults??
+
+Gregarina <- unname(otu_table(subset_taxa(PG.hPP.Ages, genus%in%"Gregarina")))
+## need to sum up because of alternative taxonomic paths
+Gregarina <- rowSums(Gregarina)
+
+Gregarina <- cbind(sample_data(PG.hPP.Ages), Gregarina)
+
+sort(tapply(Gregarina$Gregarina, as.factor(Gregarina$Season):as.factor(Gregarina$Age), median))
+sort(tapply(Gregarina$Gregarina, as.factor(Gregarina$Season):as.factor(Gregarina$Age), function(x) mean(log10(x+1))))
+
+sort(tapply(Gregarina$Gregarina, as.factor(Gregarina$Age), median))
+sort(tapply(Gregarina$Gregarina, as.factor(Gregarina$Age), function(x) mean(log10(x+1))))
+## Probably NOT! Very dodgy...
+
+
+## Testing for reproductive status and season, ONLY for adult females!
+PM.hPP.AdultF <- subset_samples(PM.hPP,
+                                   Age%in%"mat" &
+                                   Repro%in%c( "lact", "preg", "u") &
+                                   Sex%in%c("f") &
+                                   Season%in%c("d", "w") &
+                                   hab%in%c("lg", "sgp")
+                                )
+
+deseqTestNULL(PM.hPP.AdultF, ~ Repro*Season, ~Repro+Season)
+deseqTestNULL(PM.hPP.AdultF, ~ Repro*Season, ~Repro)
+deseqTestNULL(PM.hPP.AdultF, ~ Repro*Season, ~Season)
+deseqTestNULL(PM.hPP.AdultF, ~ Repro*Season, ~1)
+deseqTestNULL(PM.hPP.AdultF, ~ Repro, ~1)
+deseqTestNULL(PM.hPP.AdultF, ~ Season, ~1)
+## Absolutely nothing!
+
+## Same for genera
+PG.hPP.AdultF <- subset_samples(PG.hPP,
+                                Age%in%"mat" &
+                                Repro%in%c("lact", "preg", "u") &
+                                Sex%in%c("f") &
+                                Season%in%c("d", "w") &
+                                hab%in%c("lg", "sgp")
+                                )
+
+deseqTestNULL(PG.hPP.AdultF, ~ Repro*Season, ~Repro+Season)
+deseqTestNULL(PG.hPP.AdultF, ~ Repro*Season, ~Repro)
+deseqTestNULL(PG.hPP.AdultF, ~ Repro*Season, ~Season)
+deseqTestNULL(PG.hPP.AdultF, ~ Repro*Season, ~1)
+deseqTestNULL(PG.hPP.AdultF, ~ Repro, ~1)
+deseqTestNULL(PG.hPP.AdultF, ~ Season, ~1)
+## Absolutely nothing!
+
+
+## Testing for reproductive status and season, ONLY for adult females!
+PM.hPP.AdultM <- subset_samples(PM.hPP,
+                                   Age%in%"mat" &
+                                   Repro%in%c("b", "h") &
+                                   Sex%in%c("m") &
+                                   Season%in%c("d", "w") &
+                                   hab%in%c("lg", "sgp")
+                                )
+
+deseqTestNULL(PM.hPP.AdultM, ~ Repro*Season, ~Repro+Season)
+deseqTestNULL(PM.hPP.AdultM, ~ Repro*Season, ~Repro)
+deseqTestNULL(PM.hPP.AdultM, ~ Repro*Season, ~Season)
+deseqTestNULL(PM.hPP.AdultM, ~ Repro*Season, ~1)
+deseqTestNULL(PM.hPP.AdultM, ~ Repro, ~1)
+deseqTestNULL(PM.hPP.AdultM, ~ Season, ~1)
+## Absolutely nothing!
+
+## Same for genera
+PG.hPP.AdultM <- subset_samples(PG.hPP,
+                                Age%in%"mat" &
+                                Repro%in%c("b", "h") &
+                                Sex%in%c("m") &
+                                Season%in%c("d", "w") &
+                                hab%in%c("lg", "sgp")
+                                )
+
+deseqTestNULL(PG.hPP.AdultM, ~ Repro*Season, ~Repro+Season)
+deseqTestNULL(PG.hPP.AdultM, ~ Repro*Season, ~Repro)
+deseqTestNULL(PG.hPP.AdultM, ~ Repro*Season, ~Season)
+deseqTestNULL(PG.hPP.AdultM, ~ Repro*Season, ~1)
+deseqTestNULL(PG.hPP.AdultM, ~ Repro, ~1)
+deseqTestNULL(PG.hPP.AdultM, ~ Season, ~1)
+
+## more Haemonchus in harem stallions?
+Haemonchus <- unname(otu_table(subset_taxa(PG.hPP.AdultM, genus%in%"Haemonchus")))
+## need to sum up because of alternative taxonomic paths
+Haemonchus <- rowSums(Haemonchus)
+
+Haemonchus <- cbind(sample_data(PG.hPP.AdultM), Haemonchus)
+
+sort(tapply(Haemonchus$Haemonchus, as.factor(Haemonchus$Season):as.factor(Haemonchus$Repro), median))
+sort(tapply(Haemonchus$Haemonchus, as.factor(Haemonchus$Season):as.factor(Haemonchus$Repro), function(x) mean(log10(x+1))))
+
+sort(tapply(Haemonchus$Haemonchus, as.factor(Haemonchus$Repro), median))
+sort(tapply(Haemonchus$Haemonchus, as.factor(Haemonchus$Repro), function(x) mean(log10(x+1))))
+
+## Bachelors have more!!!
+
+## ggplot(Haemonchus, aes(Repro, Haemonchus)) +
+##     geom_boxplot() +
+##     scale_y_log10()
+       
+
+### Extract and revisit all Necator ASVs
+Necator <- unname(otu_table(subset_taxa(PM.hPP.Ages, genus%in%"Necator")))
+
+Necator.seq <- colnames(otu_table(subset_taxa(PM.hPP.Ages, genus%in%"Necator")))
+Necator.seq <- unlist(strsplit(Necator.seq, "NNNNNNNNNN"))
+
+writeFasta(Necator.seq, "Necator.fasta")
+
+
+### Extract and revisit all Cylicostephanus ASVs
+Cylico <- unname(otu_table(subset_taxa(PM.hPP.Ages, genus%in%"Cylicostephanus")))
+
+Cylico.seq <- colnames(otu_table(subset_taxa(PM.hPP.Ages, genus%in%"Cylicostephanus")))
+Cylico.seq <- unlist(strsplit(Cylico.seq, "NNNNNNNNNN"))
+
+writeFasta(Cylico.seq, "Cylico.fasta")
 
 
 

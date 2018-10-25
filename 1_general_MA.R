@@ -167,20 +167,22 @@ if(newTax){
     names(blast) <- c("query", "subject", "pident", "length", "mismatch",
                       "gapopen", "qstart", "qend", "sstart", "send", "evalue",
                       "bitscore", "staxid")
+    
+    blastT <- as.data.table(blast)
+    blastT$staxid <- as.character(blastT$staxid)
+    
+    read.nodes.sql("/SAN/db/taxonomy/nodes.dmp",
+                   "/SAN/db/taxonomy/taxonomizr.sql")
+    read.names.sql("/SAN/db/taxonomy/names.dmp",
+                   "/SAN/db/taxonomy/taxonomizr.sql")
 
-    taxaNodes <- read.nodes("/SAN/db/taxonomy/nodes.dmp")
-    taxaNames <- read.names("/SAN/db/taxonomy/names.dmp")
-
-    blast.tax <- getTaxonomy(unique(blast$staxid),taxaNodes,taxaNames)
-    blast.tax <- as.data.frame(blast.tax)
-    blast.tax$staxid <- unique(blast$staxid)
-    rownames(blast.tax) <- NULL
-
-    saveRDS(blast.tax, file="/SAN/Zebra/blast_tax.Rds")
-
-    blastT <- merge(blast, blast.tax, by="staxid")
-
-    blt <- as.data.table(blastT)
+    blast.tax <- getTaxonomy(unique(blastT$staxid),
+                             "/SAN/db/taxonomy/taxonomizr.sql")
+    
+    blast.tax <- as.data.table(blast.tax, keep.rownames="staxid")
+    blast.tax$staxid <- gsub("\\s*", "", blast.tax$staxid)
+    
+    blt <- merge(blastT, blast.tax, by="staxid", all=TRUE)
 
     blt <- blt[,.(bitsum=sum(bitscore),
                   superkingdom, phylum, class, order, family, genus, species),
@@ -188,46 +190,67 @@ if(newTax){
 
     blt <- unique(blt)
 
-    blt <- blt[,.(bitdiff= bitsum - max(bitsum),
+    blt <- blt[,.(bitdiff= max(bitsum) - bitsum,
                   superkingdom, phylum, class, order, family, genus, species),
                by=c("query")]
 
-    get.opt.gen <- function(para, what){
+    get.opt.gen <- function(bdiff, Nsupport, what, eval=TRUE){
         get.unique.or.na <- function (x){
             ## unique taxa at that level excluding potential NA's 
-            ux <- unique(as.character(x[!is.na(x)]))
+            agnostic <- as.character(x)
+            taxa <- agnostic[!is.na(agnostic)]
+            ux <- unique(taxa)
             ## but return NA if they are not unique
-            if(length(ux)==1){return(ux)} else {as.character(NA)}
+            if(length(taxa)>=Nsupport & ## number of supporting annotations
+               length(ux)==1){ ## has to be a unique answer
+                return(ux)
+            } else {as.character(NA)}
         }
-
-        df <- blt[bitdiff > para, .(get.unique.or.na(eval(as.name((what))))),
+        df <- blt[bitdiff <= bdiff, .(get.unique.or.na(eval(as.name((what))))),
                      by=query]
         setnames(df, "V1", what)
-        length(df[, eval(as.name(what))][is.na(df[, eval(as.name(what))])])
+        if(!eval){
+            df
+        } else{
+            length(df[, eval(as.name(what))][is.na(df[, eval(as.name(what))])])
+        }
     }
 
-    get.opt.gen(-2.8, "genus")
+    skiOptim <- optimize(get.opt.gen, upper=10^5, lower=0, what="superkingdom",
+                         Nsupport=1)
+
+    superkingdom <- get.opt.gen(skiOptim$minimum, what="superkingdom",
+                                Nsupport=1, eval=FALSE)
     
-    optimize(get.opt.gen, upper = -1, lower=-50, what="genus")
-
-
-    genus <- blt[bitdiff > -2.8, .(get.unique.or.na(genus)),
-                 by=query]
+    phyOptim <- optimize(get.opt.gen, upper=10^5, lower=0, what="phylum",
+                         Nsupport=1)
     
-    family <- blt[bitdiff>-20, .(family=get.unique.or.na(family)),
-                  by=query]
+    phylum <- get.opt.gen(phyOptim$minimum, what="phylum",
+                          Nsupport=1, eval=FALSE)
 
-    order <- blt[bitdiff>-30, .(order=get.unique.or.na(order)),
-                 by=query]
+    claOptim <- optimize(get.opt.gen, upper=10^5, lower=0, what="class",
+                         Nsupport=1)
+        
+    class <- get.opt.gen(claOptim$minimum, what="class",
+                         Nsupport=1, eval=FALSE)
+    
+    ordOptim <- optimize(get.opt.gen, upper=10^5, lower=0, what="order",
+                         Nsupport=1)
 
-    class <- blt[bitdiff>-40, .(class=get.unique.or.na(class)),
-                 by=query]
+    order <- get.opt.gen(ordOptim$minimum, what="order",
+                         Nsupport=1, eval=FALSE)
 
-    phylum <- blt[bitdiff>-50, .(phylum=get.unique.or.na(phylum)),
-                  by=query]
+    famOptim <- optimize(get.opt.gen, upper=10^5, lower=0, what="family",
+                         Nsupport=1)
 
-    superkingdom <- blt[bitdiff>-100, .(superkingdom=get.unique.or.na(superkingdom)),
-                        by=query]
+    family <- get.opt.gen(famOptim$minimum, what="family",
+                         Nsupport=1, eval=FALSE)
+    
+    genOptim <- optimize(get.opt.gen, upper=10^5, lower=0, what="genus",
+                         Nsupport=1)
+
+    genus <- get.opt.gen(genOptim$minimum, what="genus",
+                          Nsupport=1, eval=FALSE)
 
     annot <- cbind(superkingdom[,c("query", "superkingdom")],
                    phylum[,"phylum"],
@@ -236,6 +259,8 @@ if(newTax){
                    family[,"family"],
                    genus[,"genus"])
 
+    tail(table(annot[annot$phylum%in%"Nematoda", genus])[order(table(annot[annot$phylum%in%"Nematoda", genus]))], n=100)
+    
     ## now we have to break this up into an annotation list for each
     ## amplicon
     seqnametab <- as.data.table(cbind(query=names(sequences), sequences))
@@ -269,13 +294,22 @@ STnoC <- STnoC[keep]
 ## now they are in sync
 cbind(cumsum(unlist(lapply(annot.list, nrow))), cumsum(unlist(lapply(STnoC, ncol))))
 
+## name the annotation lists to have the names of the taxa 
+annot.list <- lapply(seq_along(annot.list), function (i){
+    an <- as.matrix(annot.list[[i]])
+    rownames(an) <- colnames(STnoC[[i]])
+    an
+})
+    
+names(annot.list) <- names(STnoC)
+
 ## tabulate Phyla for each amplicon
 lapply(annot.list, function (x) table(x[, "phylum"]))
 
 tabulate.genera <- function(tax, subset){
-    t <- tax[phylum%in%subset, ]
+    t <- tax[tax[, "phylum"]%in%subset, ]
     if(!is.null(ncol(t))){
-        table(t[,genus])
+        table(t[, "class"])
     } else {NULL}
 }
 
@@ -336,6 +370,7 @@ pdf("figures/primers_MA_sorted_VAL.pdf", width=45, height=15, onefile=FALSE)
 plotAmpliconNumbers(MA)
 dev.off()
 
+
 fill <- fillSampleTables(MA)
 MA@sequenceTableFilled <- fill@sequenceTableFilled
 
@@ -343,30 +378,58 @@ MA@sequenceTableFilled <- fill@sequenceTableFilled
 ALL <- Reduce(cbind, fill@sequenceTableFilled)
 
 ## same for tax
-all.tax <- as.data.frame(Reduce(rbind, annot.list[rownames(MA)]))
-all.tax <- as.matrix(all.tax)
-
-## bring in same order and remove tax from bad amplicons (sorted out
-## above) ## not necessary
-## all.tax <- all.tax[colnames(ALL), ]
-rownames(all.tax) <- colnames(ALL)
+all.tax <- Reduce(rbind, annot.list[rownames(MA)])
 
 PS <- phyloseq(otu_table(ALL, taxa_are_rows=FALSE),
                sample_data(samples.long[rownames(ALL), ]),
                tax_table(all.tax))
 
-Zeb.tab <- as.data.table(cbind(otu_table(PS),
-                               Animal=sample_data(PS)$Animal.No))
 
-Ccols <- colnames(Zeb.tab)[!colnames(Zeb.tab)%in%"Animal"]
 
-Zeb <- Zeb.tab[, lapply(.SD, function(x) sum(as.numeric(x))),
-               by=Animal, .SDcols=Ccols]
+mergeTecRep <- function (Phy){
+    Zeb.tab <- as.data.table(cbind(otu_table(Phy),
+                                   Animal=sample_data(Phy)$Animal.No))
+    Ccols <- colnames(Zeb.tab)[!colnames(Zeb.tab)%in%"Animal"]
+    Zeb <- Zeb.tab[, lapply(.SD, function(x) sum(as.numeric(x))),
+                   by=Animal, .SDcols=Ccols]
+    Zebra <- as.data.frame(Zeb[, ..Ccols])
+    rownames(Zebra) <- Zeb[, Animal]
+    Zebra
+}
 
-Zebra <- as.data.frame(Zeb[, ..Ccols])
-
-rownames(Zebra) <- Zeb[, Animal]
+Zebra <- mergeTecRep(PS)
 
 PM <- phyloseq(otu_table(Zebra, taxa_are_rows=FALSE),
                sample_data(sample.data[rownames(Zebra), ]),
                tax_table(tax_table(all.tax)))
+
+
+PS.l <- lapply(seq_along(STnoC), function(i){
+    phyloseq(otu_table(STnoC[[i]], taxa_are_rows=FALSE),
+             sample_data(samples.long[rownames(STnoC[[i]]), ]),
+             tax_table(tax_table(annot.list[[i]])))
+})
+
+names(PS.l) <- names(STnoC)
+
+Zebra.l <- lapply(PS.l, mergeTecRep)
+
+PM.l <- lapply(seq_along(Zebra.l), function(i){
+    phyloseq(otu_table(Zebra.l[[i]], taxa_are_rows=FALSE),
+             sample_data(sample.data[rownames(Zebra.l[[i]]), ]),
+             tax_table(tax_table(annot.list[[i]])))
+})
+
+sumSeqByTax <- function (Phy, tax) {
+    counts <- data.frame(cbind(asvCount=colSums(otu_table(Phy)), tax_table(Phy)))
+    counts$asvCount <- as.numeric(as.character(counts$asvCount))
+    tapply(counts$asvCount, counts[, tax], sum)
+}
+
+
+readNumByPhylum <- lapply(PS.l, sumSeqByTax, "phylum")
+names(readNumByPhylum) <- names(STnoC)
+
+
+readNumByGenus <- lapply(PS.l, sumSeqByTax, "genus") ## Change "text" in order to get counts per a different taxonomic level
+names(readNumByGenus) <- names(STnoC)
