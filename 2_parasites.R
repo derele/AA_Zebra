@@ -1,23 +1,68 @@
 library(pheatmap)
 library(DESeq2)
 library(ggplot2)
+library(tidyverse)
 
 
-if(!exists("PM")){
+if(!exists(c("PMharsh"))){
     source("1_general_MA.R")
 }
 
+
+psTaxa <- psmelt(PMharsh)
+
+
+paraTableA <- psTaxa[psTaxa$phylum%in%(
+    c("Nematoda", "Apicomplexa", "Acanthocephala", "Arthropoda", "Platyhelminthes")), ]
+
+
+getParaTable <- function (paraTable) {
+    as_tibble(paraTable) %>%
+        filter(!is.na(species)) %>%
+        group_by(species) %>%
+        filter(Abundance > 0) %>%
+    summarize(sumAbu=sum(Abundance), nHosts=length(unique(Animal.No)),
+              nASVs=length(unique(OTU)),
+              Uphylum=paste(unique(phylum), collapse="_"),
+              Uorder=paste(unique(order), collapse="_"),
+              Uorder=paste(unique(family), collapse="_")) %>%
+    arrange(desc(sumAbu))
+}
+
+PT <- getParaTable(paraTableA)
+
+Globi <- read.delim("/SAN/db/interactions.tsv")
+
+Globi %>% filter(grepl("parasite", interactionTypeName)) -> Paraglobi
+
+Paraglobi %>% filter_at(vars(contains("Taxon")),
+                        any_vars(grepl("Equus", ., ignore.case=TRUE))) -> bar
+
+horseParasites <- as.character(unique(bar$sourceTaxonName))
+
+detectedHorseParasites <- PT[PT$species%in%horseParasites,]
+
+
+baz <- unique(paraTableA[paraTableA$species%in%detectedHorseParasites$species,
+                         c("species", "OTU")])
+
+writeFasta(baz$OTU, "parasiteSelection.fasta")
 
 ################################## 18S and 28S  #########################
 PS.para <- subset_taxa(PS, phylum%in%c("Nematoda",
                                        "Apicomplexa",
                                        "Platyhelminthes"))
 
+psmelt(PS.para) %>%
+    getParaTable() -> foo
+    write_csv("parasites.csv")
+
+
 PM.para <- subset_taxa(PM, phylum%in%c("Nematoda",
                                        "Apicomplexa",
                                        "Platyhelminthes"))
 
-ordi.l <- lapply(PM.l, function (P) { 
+ordi.l <- lapply(PS.l, function (P) { 
     GP <- prune_taxa(taxa_sums(P) > 0, P)
     GP <- prune_samples(sample_sums(GP) > 0, GP)
     plot_ordination(GP, ordinate(GP, "MDS"), color = "Season") + geom_point(size = 5)
@@ -27,29 +72,24 @@ names(ordi.l) <- names(PS.l)
 
 ordi.l <- ordi.l[!unlist(lapply(ordi.l, is.null))]
 
+pdf("figures/ordi_raw.pdf")
 lapply(seq_along(ordi.l), function (i) {
     ordi.l[[i]] + ggtitle(names(ordi.l[i]))
 })
-
-GP <- prune_taxa(taxa_sums(PM) > 0, PS)
-
-plot_richness(GP, x="Repro", measures="Observed")  + geom_violin() + geom_jitter() 
 dev.off()
 
 
-foo <- tax_glom(subset_taxa(PM, genus%in%"Toxocara"), "genus")
-bar <- as(otu_table(foo), "vector")
-foobar <- cbind(bar, sample_data(foo))
-
-
+pdf("figures/raw_rich.pdf")
+plot_richness(GP, x="Repro", measures="Observed")  + geom_violin() + geom_jitter() 
+dev.off()
 
 PG.para <- tax_glom(PM.para, "genus", NArm = TRUE)
 
-table(tax_table(PG.para)[,6])
+table(tax_table(PG.para)[,5])
 
 mat <- as.matrix(t(otu_table(PG.para)))
 
-rownames(mat) <- make.names(tax_table(PG.para)[, 6])
+rownames(mat) <- make.names(tax_table(PG.para)[, 5])
 
 colanot <- data.frame(lapply(sample_data(PG.para)[, c("veg", "Sex", "Age")],
                              factor))
@@ -66,7 +106,7 @@ pheatmap(log10(mat+1),  labels_col=rep("", times=ncol(mat)),
 dev.off()
 
 ## high prervalence Strongyles!!!
-hPP <- c("Strongylus", "Cylicostephanus", "Cylicocyclus", "Caenorhabditis")
+hPP <- c("Strongylus", "Cylicostephanus", "Cylicocyclus")
 
 nameOtuByTax <- function(ps, taxon="genus"){
     otable <- otu_table(ps)

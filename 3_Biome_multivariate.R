@@ -1,36 +1,102 @@
+library(vegan)
+
 ## need to see what's required and source the respective data...
 
-## data without NA
-ps18S.clean <- subset_samples(ps18S, !is.na(sample_data(ps18S)$cellul)&
-                                     !is.na(sample_data(ps18S)$FGM))
 
-ps18sdat.clean <- ps18sdat[!is.na(ps18sdat$cellul)&
-                           !is.na(sample_data(ps18S)$FGM), ]
+getOrdinations <- function(ps){
+    ps <- prune_taxa(taxa_sums(ps) > 0, ps)
+    ## at least 100 otus in table otherwise ordination breaks
+    if(ncol(otu_table(ps))<100){
+        return(NULL)
+    } else{
+        psD <- sample_data(ps)
+        psNA <- subset_samples(ps, !is.na(cellul)&
+                                   !is.na(FGM))
+        ps.dat <- sample_data(psNA)
+        class(ps.dat) <- "data.frame"
+        ## dbrda because it can do maringals  
+        adonis <- dbrda(otu_table(psNA)~veg+Repro+dens,
+                        data=ps.dat, distance="bray")
+        marginals <- anova(adonis, by = 'margin')
+        marginals
+    }
+}
 
-## now everything is gone...? But above?
+allO <- getOrdinations(ps=PS)
 
-## dbrda because it can do maringals  
-ado.18S.all <- dbrda(otu_table(ps18S.clean)~cellul+Season+veg+
-                         Sex+Age+Repro+dens+FGM,
-                     data=ps18sdat.clean) ##, distance="bray")
+allO <- getOrdinations(ps=PM)
 
-marg.ado.18S.all <- anova(ado.18S.all, by = 'margin')
+allO <- getOrdinations(ps=PGM)
+
+allO <- getOrdinations(ps=PMharsh)
+
+allO <- getOrdinations(ps=PGMharsh)
+
+allO <- getOrdinations(ps=PMGharsh)
+
+EukO <- getOrdinations(subset_taxa(PMGharsh,
+                                   superkingdom%in%"Eukaryota"))
+EukO[[1]]
+
+
+BacO <- getOrdinations(subset_taxa(prune_taxa(taxa_sums(PMGharsh) > 5, PMGharsh),
+                       superkingdom%in%"Bacteria"))
+
+FunO <- getOrdinations(subset_taxa(PGMharsh,
+                                   phylum%in%c("Ascomycota",
+                                               "Basidiomycota",
+                                               "Blastocladiomycota",
+                                               "Chytridiomycota",
+                                               "Cryptomycota",
+                                               "Mucoromycota",
+                                               "Olpidiomycota",
+                                               "Planctomycetes",
+                                               "Zoopagomycota")))
+FunO
+
+ord.l <- lapply(PS.l, getOrdinations)
+names(ord.l) <- names(PS.l)
+
+ordM.l <- lapply(PM.l, getOrdinations)
+names(ord.l) <- names(PS.l)
+
+
+### ord.l[["ADM330.Klin0785_CR 16S"]] ## has significant density
 
 ## "NMDS", "bray" does not work ... PCoA works
-X18S.ord <- ordinate(ps18S, "PCoA", "bray")
+getOrdPlot <- function (ps, color="dens", shape="veg"){
+    psp <- prune_samples(sample_sums(ps)>=20, ps)
+    ord.unsup <- ordinate(psp, "PCoA", "bray")
+    plot.unsup <- plot_ordination(psp, ord.unsup,
+                                  color=color, shape=shape) +
+        geom_point(size=5) 
+    psD <- sample_data(psp)
+    psNA <- subset_samples(psp, !is.na(cellul)&
+                                !is.na(Age)&
+                                !is.na(dens))
+    formula <- as.formula(paste0("psNA ~",  color,  "+",  shape))
+    ord.sup <- ordinate(psNA,
+                        "CCA", formula = formula)
+    plot.sup <- plot_ordination(psNA, ord.sup,
+                                color=color, shape=shape) +
+        geom_point(size=5) 
+    list(ord.unsup, plot.unsup, ord.sup, plot.sup)
+}
 
-X18S.ccpna <- ordinate(ps18S.clean, "CCA",
-                       formula = ps18S.clean ~ Age + cellul + dens)
+ordPlot <- getOrdPlot(PM.l[["ACM_008.Klin0341_CR 16S"]], "Repro")
 
-## insepcting this it looks like age is an artefact influenced by  outliers. 
-### autoplot(X18S.ccpna)
+ordPlot <- getOrdPlot(PM.l[["Klin0341.Klin0785_CR 16S"]], "Repro")
 
-## vegetation and density are worth plotting
+ordPlot <- getOrdPlot(PM.l[["ADM330.Klin0785_CR 16S"]], "Repro")
 
-pdf("figures/ordi_18S_raw_brayPCoA_densVeg.pdf")
-plot_ordination(ps18S, X18S.ord, color="veg", shape="dens") +
-    geom_point(size=5) 
+ordPlot <- getOrdPlot(PS.l[["Proti15.Proti440R 18S"]], "Sex")
+
+ordPlot <- getOrdPlot(PS.l[["D3A_5_3Mod.D3B_5_3Mod 28S"]], "Repro")
+
 dev.off()
+
+ordPlot <- getOrdPlot(PGMharsh)
+
 
 ## 18S: no comositional difference between sexes!?
 
@@ -40,8 +106,6 @@ plot_ordination(ps18S, X18S.ord, color="veg", shape="Season") +
 dev.off()
 
 ## 18S: high comositional difference between vegetation!?
-
-
 
 pdf("figures/ordi_18S_raw_brayPCoA_seascol.pdf")
 plot_ordination(ps18S, X18S.ord, color="Season", shape="veg") +
