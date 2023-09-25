@@ -1,17 +1,25 @@
 library(ggplot2)
-library(MultiAmplicon)
 library(reshape)
 library(phyloseq)
 library(data.table)
 library(taxonomizr)
 library(taxize)
 library(parallel)
+library(dada2)
 
+## was using the local devel version for some time
+## devtools::load_all("../MultiAmplicon")
+
+## having devel merged into main now:
+## devtools::install_github("derele/MultiAmplicon")
+
+library(MultiAmplicon)
 
 ## Filter # only run when new filtered data is needed
 FILTER <- FALSE
-newMA <- FALSE
-newTax <- FALSE
+newMAsort <- FALSE
+newMApipe <- FALSE
+newTax <- TRUE
 
 ## first pool file paths
 files <- list.files(path="/SAN/Zebra/raw_all_fastqs",
@@ -78,54 +86,107 @@ rownames(ptable) <- names(primers)
 
 MA <- MultiAmplicon(primers, files)
 
-if(newMA) {
-    if(dir.exists("./stratified_files/")){
-        unlink("./stratified_files/",
-               recursive=TRUE)
+if(newMAsort){
+    fd <- "devStratFiles"
+    if(dir.exists(fd)){
+        unlink(fd, recursive=TRUE)
     }
-    MA1 <- sortAmplicons(MA, starting.at=1, max.mismatch=4)
-    pdf("figures/primers_MA_sorted.pdf", width=46)
-    plotAmpliconNumbers(MA1)
-    dev.off()
-    MA2 <- derepMulti(MA1, mc.cores=20)
-    MA3.1 <- dadaMulti(MA2[, which(grepl("^P1", colnames(MA2)))],
-                       Ferr=NULL, Rerr=NULL, selfConsist=TRUE,
-                   multithread=FALSE, mc.cores=20, verbose=0, MAX_CONSIST=20)
-    MA3.2 <- dadaMulti(MA2[, which(grepl("^P2", colnames(MA2)))],
-                       Ferr=NULL, Rerr=NULL, selfConsist=TRUE,
-                       multithread=FALSE, mc.cores=20, verbose=0, MAX_CONSIST=20)
-    MA3 <- concatenateMultiAmplicon(MA3.1, MA3.2)    
-    MA4.merged <- mergeMulti(MA3, justConcatenate=FALSE, minOverlap=8, maxMismatch=1,
-                             mc.cores=20)
+    MA1 <- sortAmplicons(MA, filedir=fd, starting.at=1, max.mismatch=4)
+    saveRDS(MA1, file="/SAN/Zebra/MA1.Rds")
+} else {
+    MA1 <- readRDS(file="/SAN/Zebra/MA1.Rds")
+}
+
+pdf("figures/primers_MA_sorted.pdf", width=46)
+plotAmpliconNumbers(MA1)
+dev.off()
+
+if(newMApipe) {
+    ## dereplication
+    MAderep <- derepMulti(MA1, mc.cores=20)
+
+    ## ## abandonned approach
+    ## ## indexes for seperate error estimation
+    ## P1idx <- grep("^P1", colnames(MAderep))
+    ## P2idx <- grep("^P2", colnames(MAderep))
+    ## ## estimation of seperate error profiles for each run
+    ## ## run 1
+    ## MAdada.1 <- dadaMulti(MAderep[, P1idx],
+    ##                    Ferr=NULL, Rerr=NULL, selfConsist=TRUE,
+    ##                    multithread=FALSE,
+    ##                    mc.cores=20, verbose=0, MAX_CONSIST=20)
+    ## ## run 2
+    ## MAdada.2 <- dadaMulti(MAderep[, P2idx],
+    ##                    Ferr=NULL, Rerr=NULL, selfConsist=TRUE,
+    ##                    multithread=FALSE,
+    ##                    mc.cores=20, verbose=0, MAX_CONSIST=20)
+
+    ## ## problematic are
+    ## ##     "psbA3_f_5Mod.trnHf_05_5Mod trnH_psbA"
+    ## ##     "18S_0067a_deg_5Mod.NSR 399_5Mod 18S"
+    ## ##      "Proti1702.wang1624CR6L 18S"
+
+    ## dada(getStratifiedFilesR(MA1["psbA3_f_5Mod.trnHf_05_5Mod trnH", P2idx]),
+    ##      selfConsist = TRUE, err=NULL, pool=FALSE)
+
+    ## dada(getStratifiedFilesR(MA1["18S_0067a_deg_5Mod.NSR 399_5Mod 18S", P2idx]),
+    ##      selfConsist = TRUE, err=NULL, pool=FALSE)
+
+    ## dada(getStratifiedFilesR(MA1["LSU_Fwd_2_3Mod.LSU_Rev_4 28S", P2idx]),
+    ##      selfConsist = TRUE, err=NULL, pool=FALSE)
+        
+    ## getStratifiedFilesR(MA1["psbA3_f_5Mod.trnHf_05_5Mod trnH", P2idx])
+    
+    ## getStratifiedFilesR(MA1["18S_0067a_deg_5Mod.NSR 399_5Mod 18S", P2idx])
+
+    ## getStratifiedFilesR(MA1["LSU_Fwd_2_3Mod.LSU_Rev_4 28S", P2idx])
+
+    ## without seperating the two sequencing runs for different error
+    ## estimation
+    
+    ## concatenating the seperately estimated MA objects
+
+    ## MA3 <- concatenateMultiAmplicon(MAdada.1, MAdada.2)    
+
+    errF <-  learnErrors(unlist(getStratifiedFilesF(MAderep)), 
+                         verbose=0, multithread = 64)
+    errR <- learnErrors(unlist(getStratifiedFilesR(MAderep)), 
+                        verbose=0, multithread = 64)
+    
+    MA3 <- dadaMulti(MAderep, Ferr=errF, Rerr=errR, pool=FALSE,
+                     verbose=0, mc.cores=64)
+    
+    MA4.merged <- mergeMulti(MA3, justConcatenate=FALSE, mc.cores=20)
+    
     prop.merged <- calcPropMerged(MA4.merged)
     prop.merged[is.na(prop.merged)] <- 0
+
     MA4 <- mergeMulti(MA3, justConcatenate=prop.merged<0.5,
-                      minOverlap=8, maxMismatch=1,
-                      mc.cores=20)
-    ## removed a bug here, now working with empty amplicons
-    MA5 <- makeSequenceTableMulti(MA4, mc.cores=20, orderBy="nsamples")
-    MA6 <- removeChimeraMulti(MA5, mc.cores=20)
+                      mc.cores=64)
+    
+    MA5 <- makeSequenceTableMulti(MA4, mc.cores=64, orderBy="nsamples")
+    MA6 <- removeChimeraMulti(MA5, mc.cores=64)
     saveRDS(MA6, file="/SAN/Zebra/MA6.Rds")
 } else {
     MA6 <- readRDS(file="/SAN/Zebra/MA6.Rds")
 }
 
-## When loading an old MA object that lacks sample data, simply:
-MA6 <- addSampleData(MA6)
-
 if (newTax){
     MA7 <- blastTaxAnnot(MA6,
-                         infasta="/SAN/Zebra/all_in.fasta",
-                         outblast="/SAN/Zebra/blast_out.fasta", 
-                         taxonSQL="/SAN/db/taxonomy/taxonomizr2.sql")
+                         infasta="tmp_all_in.fasta",
+                         outblast="tmp_blast_out.fasta",
+                         negative_gilist="/SAN/db/blastdb/uncultured_gilist.txt", 
+                         taxonSQL="/SAN/db/taxonomy/taxonomizr2.sql",
+                         num_threads=64)
     saveRDS(MA7, file="/SAN/Zebra/MA7.Rds")
 } else {
     MA7 <- readRDS(file="/SAN/Zebra/MA7.Rds")
 }
 
 
-## ## Better way to do this needed!!!!!! Within package?
 ## ## tabulate Phyla for each amplicon
+## and a few other quick checks.... 
+
 lapply(getTaxonTable(MA7), function (x) table(as.vector(x[, "phylum"])))
 
 ## lapply(getTaxonTable(MA7), function (x){
@@ -180,6 +241,8 @@ rownames(samples.long) <- samples.long$FAA_index_I
 
 ## now add more content in  sample data
 MAsample <- addSampleData(MA7, samples.long)
+
+#### Have to match the sample data again here!!!
 
 
 pdf("figures/primers_MA_sorted_POS.pdf", 

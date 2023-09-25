@@ -9,3 +9,5 @@
 /figures
 /stratified_files
 *~
+/tmp_all_in.fasta
+/tmp_blast_out.fasta
