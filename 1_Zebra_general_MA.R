@@ -133,7 +133,7 @@ if (newTax){
                          infasta="tmp_all_in.fasta",
                          outblast="tmp_blast_out.fasta",
                          negative_gilist="/SAN/db/blastdb/uncultured_gilist.txt", 
-                         taxonSQL="/SAN/db/taxonomy/taxonomizr2.sql",
+                         taxonSQL="/SAN/db/taxonomy/taxonomizr.sql",
                          num_threads=64)
     saveRDS(MA7, file="/SAN/Zebra/MA7.Rds")
 } else {
@@ -248,7 +248,7 @@ pdf("figures/primers_MA_sorted_VAL.pdf", width=45, height=15, onefile=FALSE)
 plotAmpliconNumbers(MA8)
 dev.off()
 
-PS <- toPhyloseq(MA8, samples=colnames(MA8))
-## remove taxa with zero reports
-PS <- prune_taxa(taxa_sums(PS) > 0, PS)
+PS <- toPhyloseq(MA8, samples=colnames(MAsample))
+
+saveRDS(PS, "intermediate_data/phyloseqRAW.RDS")
 
